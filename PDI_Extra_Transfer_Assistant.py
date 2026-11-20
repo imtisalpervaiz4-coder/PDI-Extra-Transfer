@@ -1,18 +1,20 @@
 """
 PDI Extra Transfer Assistant
-Excel columns:
+Excel columns used:
   A = ITEM NO
-  E = CODE
+  E = PACKAGE CODE (read separately for each row)
   G = XFER QTY
-
-PDI sequence for every row:
-  Paste ITEM NO -> TAB x2 -> paste Excel CODE -> TAB
-  -> paste XFER QTY -> TAB x3
+PDI sequence for EVERY Excel data row:
+  Paste ITEM NO -> TAB -> TAB -> paste Excel column E code -> TAB -> paste XFER QTY
+  -> TAB -> TAB -> TAB (skip Cost, skip Retail, next row)
 
 Hotkeys:
   F9  = Start / Resume
   F10 = Pause
   F11 = Stop
+
+Keep this file and your Excel workbook wherever you like. Select the workbook
+using the dashboard's Browse button. Review the PDI transaction before saving.
 """
 
 import time
@@ -21,9 +23,16 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 
-from openpyxl import load_workbook
-import pyautogui
-import pyperclip
+try:
+    from openpyxl import load_workbook
+    import pyautogui
+    import pyperclip
+except ImportError as exc:
+    raise SystemExit(
+        f"Missing package: {exc}\n\n"
+        "Install dependencies with:\n"
+        "py -m pip install openpyxl pyautogui pyperclip keyboard"
+    )
 
 try:
     import keyboard
@@ -32,14 +41,16 @@ except ImportError:
     keyboard = None
     HOTKEYS_AVAILABLE = False
 
-pyautogui.FAILSAFE = True
-pyautogui.PAUSE = 0.05
 
+# ---------- SETTINGS: preserve the exact PDI field sequence ----------
 START_DELAY = 8
 AFTER_ITEM_DELAY = 1.50
 AFTER_PASTE_DELAY = 0.55
 TAB_DELAY = 0.40
 ROW_DELAY = 0.90
+
+pyautogui.FAILSAFE = True
+pyautogui.PAUSE = 0.05
 
 
 def as_text(value):
@@ -64,35 +75,30 @@ def load_rows(excel_file):
         ws = wb[wb.sheetnames[0]]
 
         if str(ws["A1"].value or "").strip().upper() != "ITEM NO":
-            raise ValueError("Expected ITEM NO header in Excel column A.")
-        if str(ws["E1"].value or "").strip().upper() != "CODE":
-            raise ValueError("Expected CODE header in Excel column E.")
+            raise ValueError("Expected header ITEM NO in Excel column A.")
         if str(ws["G1"].value or "").strip().upper() != "XFER QTY":
-            raise ValueError("Expected XFER QTY header in Excel column G.")
+            raise ValueError("Expected header XFER QTY in Excel column G.")
 
         rows = []
-        for r in range(2, ws.max_row + 1):
-            item = as_text(ws[f"A{r}"].value)
-            if not item:
+        for row_number in range(2, ws.max_row + 1):
+            item = ws[f"A{row_number}"].value
+            if item is None or str(item).strip() == "":
                 continue
-
-            code = as_text(ws[f"E{r}"].value)
-            qty = as_text(ws[f"G{r}"].value)
-
-            if not code:
-                raise ValueError(f"Code is blank in Excel row {r} (column E).")
-            if not qty:
-                raise ValueError(f"XFER QTY is blank in Excel row {r} (column G).")
-
+            code = ws[f"E{row_number}"].value
+            qty = ws[f"G{row_number}"].value
+            if code is None or str(code).strip() == "":
+                raise ValueError(
+                    f"Package code is blank in Excel column E, row {row_number}."
+                )
             rows.append({
-                "excel_row": r,
-                "item": item,
-                "code": code,
-                "qty": qty,
+                "excel_row": row_number,
+                "item": as_text(item),
+                "code": as_text(code),
+                "qty": as_text(qty),
             })
 
         if not rows:
-            raise ValueError("No item rows found.")
+            raise ValueError("No item rows found in the Excel file.")
         return rows
     finally:
         wb.close()
@@ -102,14 +108,13 @@ class TransferDashboard:
     def __init__(self, root):
         self.root = root
         self.root.title("PDI Extra Transfer Assistant")
-        self.root.geometry("700x520")
-        self.root.minsize(620, 470)
+        self.root.geometry("690x510")
+        self.root.minsize(620, 460)
 
         self.excel_path = tk.StringVar()
         self.status = tk.StringVar(value="Choose your Excel file to begin.")
         self.detail = tk.StringVar(value="Waiting for Excel file")
         self.progress_text = tk.StringVar(value="0 / 0")
-
         self.rows = []
         self.worker = None
         self.pause_event = threading.Event()
@@ -133,30 +138,31 @@ class TransferDashboard:
         outer = ttk.Frame(self.root, padding=18)
         outer.pack(fill="both", expand=True)
 
-        ttk.Label(outer, text="PDI EXTRA TRANSFER",
-                  font=("Segoe UI", 19, "bold")).pack(anchor="w")
+        ttk.Label(
+            outer, text="PDI EXTRA TRANSFER",
+            font=("Segoe UI", 19, "bold")
+        ).pack(anchor="w")
         ttk.Label(
             outer,
-            text="Excel-to-PDI automation • ITEM NO + Excel CODE + XFER QTY",
+            text="Automated Excel-to-PDI entry • ITEM NO + CODE + XFER QTY",
             font=("Segoe UI", 9)
         ).pack(anchor="w", pady=(2, 15))
 
         file_frame = ttk.LabelFrame(outer, text="Excel workbook", padding=12)
         file_frame.pack(fill="x")
-        ttk.Entry(file_frame, textvariable=self.excel_path).pack(
-            side="left", fill="x", expand=True, padx=(0, 8)
-        )
+        file_entry = ttk.Entry(file_frame, textvariable=self.excel_path)
+        file_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         ttk.Button(file_frame, text="Browse…", command=self.choose_file).pack(side="right")
         ttk.Button(file_frame, text="Load Excel", command=self.load_excel).pack(
             side="right", padx=(0, 8)
         )
 
-        info = ttk.LabelFrame(outer, text="Excel mapping and PDI sequence", padding=12)
+        info = ttk.LabelFrame(outer, text="Transfer rules (fixed)", padding=12)
         info.pack(fill="x", pady=12)
         ttk.Label(
             info,
             text=(
-                "Excel A = ITEM NO     |     Excel E = CODE     |     Excel G = XFER QTY\n"
+                "A: ITEM NO     |     E: PACKAGE CODE     |     G: XFER QTY\n"
                 "PDI: Paste Item → TAB ×2 → Paste Excel Code → TAB → Paste Qty → TAB ×3"
             ),
             justify="left"
@@ -164,38 +170,35 @@ class TransferDashboard:
 
         status_frame = ttk.LabelFrame(outer, text="Progress", padding=12)
         status_frame.pack(fill="x")
-        ttk.Label(status_frame, textvariable=self.status,
-                  font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(status_frame, textvariable=self.status, font=("Segoe UI", 11, "bold")).pack(anchor="w")
         ttk.Label(status_frame, textvariable=self.detail).pack(anchor="w", pady=(4, 8))
         self.progress = ttk.Progressbar(status_frame, mode="determinate", maximum=100)
         self.progress.pack(fill="x")
-        ttk.Label(status_frame, textvariable=self.progress_text).pack(
-            anchor="e", pady=(5, 0)
-        )
+        ttk.Label(status_frame, textvariable=self.progress_text).pack(anchor="e", pady=(5, 0))
 
         controls = ttk.Frame(outer)
         controls.pack(fill="x", pady=(15, 8))
-        ttk.Button(controls, text="▶  START / RESUME  (F9)",
-                   command=self.start_resume).pack(
-            side="left", fill="x", expand=True, padx=(0, 5)
+        self.start_button = ttk.Button(
+            controls, text="▶  START / RESUME  (F9)", command=self.start_resume
         )
-        ttk.Button(controls, text="Ⅱ  PAUSE  (F10)",
-                   command=self.pause).pack(
-            side="left", fill="x", expand=True, padx=5
+        self.start_button.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.pause_button = ttk.Button(
+            controls, text="Ⅱ  PAUSE  (F10)", command=self.pause
         )
-        ttk.Button(controls, text="■  STOP  (F11)",
-                   command=self.stop).pack(
-            side="left", fill="x", expand=True, padx=(5, 0)
+        self.pause_button.pack(side="left", fill="x", expand=True, padx=5)
+        self.stop_button = ttk.Button(
+            controls, text="■  STOP  (F11)", command=self.stop
         )
+        self.stop_button.pack(side="left", fill="x", expand=True, padx=(5, 0))
 
         hotkey_text = "Hotkeys: F9 Start/Resume   •   F10 Pause   •   F11 Stop"
         if not HOTKEYS_AVAILABLE:
-            hotkey_text += "\nHotkeys unavailable: install the keyboard package."
-        ttk.Label(outer, text=hotkey_text, foreground="#555").pack(anchor="w", pady=5)
+            hotkey_text += "\nHotkeys unavailable until you install: keyboard"
+        ttk.Label(outer, text=hotkey_text, foreground="#555").pack(anchor="w", pady=(4, 5))
         ttk.Label(
             outer,
-            text=("Before starting: open PDI and click the FIRST EMPTY Number cell. "
-                  "You have 8 seconds to switch to PDI."),
+            text="Before starting: open PDI, click the FIRST EMPTY Number cell. "
+                 "You have 8 seconds to switch to PDI.",
             wraplength=640
         ).pack(anchor="w")
 
@@ -212,24 +215,26 @@ class TransferDashboard:
             self.load_excel()
 
     def load_excel(self):
-        if self.running:
-            messagebox.showwarning("Busy", "Stop the current transfer before loading another file.")
-            return
         path = self.excel_path.get().strip()
         if not path:
             messagebox.showwarning("Select Excel", "Choose your Excel workbook first.")
             return
         try:
-            self.rows = load_rows(path)
+            rows = load_rows(path)
         except Exception as exc:
             messagebox.showerror("Excel error", str(exc))
             return
 
+        if self.running:
+            messagebox.showwarning("Busy", "Stop the current transfer before loading another file.")
+            return
+
+        self.rows = rows
         self.current_index = 0
         self.progress["value"] = 0
-        self.progress_text.set(f"0 / {len(self.rows)}")
+        self.progress_text.set(f"0 / {len(rows)}")
         self.status.set("Excel loaded successfully.")
-        self.detail.set(f"{len(self.rows)} item rows ready • Code is read from column E.")
+        self.detail.set(f"{len(rows)} item rows ready • Codes read from Excel column E")
         self.pause_event.clear()
         self.stop_event.clear()
 
@@ -272,16 +277,16 @@ class TransferDashboard:
         self.pause_event.clear()
         self.paused = True
         self.status.set("PAUSED — press F9 or Start / Resume to continue.")
-        self.detail.set(f"Paused at item {self.current_index + 1}.")
+        self.detail.set(f"Progress saved in this session at item {self.current_index + 1}")
 
     def stop(self):
         if not self.running:
             self.status.set("Stopped.")
             return
         self.stop_event.set()
-        self.pause_event.set()
+        self.pause_event.set()  # release a paused worker so it can exit
         self.status.set("Stopping…")
-        self.detail.set("Stopping after the current keyboard action.")
+        self.detail.set("The current keyboard/paste action will finish, then stop.")
 
     def _checkpoint(self):
         while not self.pause_event.is_set():
@@ -312,11 +317,11 @@ class TransferDashboard:
         return self._wait(TAB_DELAY)
 
     def _set_progress(self, completed, total, row):
-        self.progress["value"] = completed / total * 100 if total else 0
+        percent = completed / total * 100 if total else 0
+        self.progress["value"] = percent
         self.progress_text.set(f"{completed} / {total}")
         self.detail.set(
-            f"Excel row {row['excel_row']} • Item {row['item']} • "
-            f"Code {row['code']} • Qty {row['qty']}"
+            f"Excel row {row['excel_row']} • Item {row['item']} • Code {row['code']} • Qty {row['qty']}"
         )
 
     def _run_transfer(self):
@@ -332,9 +337,8 @@ class TransferDashboard:
                 row = self.rows[self.current_index]
                 self.ui(self._set_progress, self.current_index, total, row)
 
-                # Exact PDI sequence:
-                # ITEM NO -> TAB -> TAB -> Excel column E CODE -> TAB
-                # -> XFER QTY -> TAB -> TAB -> TAB
+                # Exact requested PDI sequence:
+                # ITEM NO -> TAB -> TAB -> row's Excel E code -> TAB -> XFER QTY -> TAB x3
                 if not self._paste(row["item"]):
                     break
                 if not self._wait(AFTER_ITEM_DELAY):
@@ -357,8 +361,7 @@ class TransferDashboard:
 
             if self.stop_event.is_set():
                 self.ui(self.status.set, "STOPPED.")
-                self.ui(self.detail.set,
-                        f"Stopped at {self.current_index} of {total} completed rows.")
+                self.ui(self.detail.set, f"Stopped at {self.current_index} of {total} completed rows.")
             elif self.current_index >= total:
                 self.ui(self.status.set, "COMPLETED — review PDI before saving/posting.")
                 self.ui(self.detail.set, f"All {total} Excel item rows were entered.")
