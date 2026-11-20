@@ -4,9 +4,11 @@ Excel columns used:
   A = ITEM NO
   E = PACKAGE CODE (read separately for each row)
   G = XFER QTY
+  H = COST
+  I = RETAIL
 PDI sequence for EVERY Excel data row:
   Paste ITEM NO -> TAB -> TAB -> paste Excel column E code -> TAB -> paste XFER QTY
-  -> TAB -> TAB -> TAB (skip Cost, skip Retail, next row)
+  -> TAB -> paste COST -> TAB -> paste RETAIL -> TAB (next row)
 
 Hotkeys:
   F9  = Start / Resume
@@ -86,6 +88,8 @@ def load_rows(excel_file):
                 continue
             code = ws[f"E{row_number}"].value
             qty = ws[f"G{row_number}"].value
+            cost = ws[f"H{row_number}"].value
+            retail = ws[f"I{row_number}"].value
             if code is None or str(code).strip() == "":
                 raise ValueError(
                     f"Package code is blank in Excel column E, row {row_number}."
@@ -95,6 +99,8 @@ def load_rows(excel_file):
                 "item": as_text(item),
                 "code": as_text(code),
                 "qty": as_text(qty),
+                "cost": as_text(cost),
+                "retail": as_text(retail),
             })
 
         if not rows:
@@ -162,8 +168,8 @@ class TransferDashboard:
         ttk.Label(
             info,
             text=(
-                "A: ITEM NO     |     E: PACKAGE CODE     |     G: XFER QTY\n"
-                "PDI: Paste Item → TAB ×2 → Paste Excel Code → TAB → Paste Qty → TAB ×3"
+                "A: ITEM NO  |  E: PACKAGE CODE  |  G: XFER QTY  |  H: COST  |  I: RETAIL\n"
+                "PDI: Item → TAB ×2 → Code → TAB → Qty → TAB → Cost → TAB → Retail → TAB"
             ),
             justify="left"
         ).pack(anchor="w")
@@ -234,7 +240,7 @@ class TransferDashboard:
         self.progress["value"] = 0
         self.progress_text.set(f"0 / {len(rows)}")
         self.status.set("Excel loaded successfully.")
-        self.detail.set(f"{len(rows)} item rows ready • Codes read from Excel column E")
+        self.detail.set(f"{len(rows)} item rows ready • Code E, Qty G, Cost H, Retail I")
         self.pause_event.clear()
         self.stop_event.clear()
 
@@ -321,7 +327,8 @@ class TransferDashboard:
         self.progress["value"] = percent
         self.progress_text.set(f"{completed} / {total}")
         self.detail.set(
-            f"Excel row {row['excel_row']} • Item {row['item']} • Code {row['code']} • Qty {row['qty']}"
+            f"Excel row {row['excel_row']} • Item {row['item']} • Code {row['code']} • "
+            f"Qty {row['qty']} • Cost {row['cost']} • Retail {row['retail']}"
         )
 
     def _run_transfer(self):
@@ -338,7 +345,8 @@ class TransferDashboard:
                 self.ui(self._set_progress, self.current_index, total, row)
 
                 # Exact requested PDI sequence:
-                # ITEM NO -> TAB -> TAB -> row's Excel E code -> TAB -> XFER QTY -> TAB x3
+                # ITEM NO -> TAB x2 -> Excel E code -> TAB -> XFER QTY
+                # -> TAB -> Excel H cost -> TAB -> Excel I retail -> TAB to next row
                 if not self._paste(row["item"]):
                     break
                 if not self._wait(AFTER_ITEM_DELAY):
@@ -351,7 +359,15 @@ class TransferDashboard:
                     break
                 if not self._paste(row["qty"]):
                     break
-                if not self._tab() or not self._tab() or not self._tab():
+                if not self._tab():
+                    break
+                if not self._paste(row["cost"]):
+                    break
+                if not self._tab():
+                    break
+                if not self._paste(row["retail"]):
+                    break
+                if not self._tab():
                     break
                 if not self._wait(ROW_DELAY):
                     break
