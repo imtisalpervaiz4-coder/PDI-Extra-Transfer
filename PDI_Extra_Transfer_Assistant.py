@@ -2,9 +2,10 @@
 PDI Extra Transfer Assistant
 Excel columns used:
   A = ITEM NO
+  E = PACKAGE CODE (read separately for each row)
   G = XFER QTY
 PDI sequence for EVERY Excel data row:
-  Paste ITEM NO -> TAB -> TAB -> paste EA -> TAB -> paste XFER QTY
+  Paste ITEM NO -> TAB -> TAB -> paste Excel column E code -> TAB -> paste XFER QTY
   -> TAB -> TAB -> TAB (skip Cost, skip Retail, next row)
 
 Hotkeys:
@@ -42,7 +43,6 @@ except ImportError:
 
 
 # ---------- SETTINGS: preserve the exact PDI field sequence ----------
-PACKAGE_CODE = "EA"
 START_DELAY = 8
 AFTER_ITEM_DELAY = 1.50
 AFTER_PASTE_DELAY = 0.55
@@ -84,10 +84,17 @@ def load_rows(excel_file):
             item = ws[f"A{row_number}"].value
             if item is None or str(item).strip() == "":
                 continue
+            code = ws[f"E{row_number}"].value
+            qty = ws[f"G{row_number}"].value
+            if code is None or str(code).strip() == "":
+                raise ValueError(
+                    f"Package code is blank in Excel column E, row {row_number}."
+                )
             rows.append({
                 "excel_row": row_number,
                 "item": as_text(item),
-                "qty": as_text(ws[f"G{row_number}"].value),
+                "code": as_text(code),
+                "qty": as_text(qty),
             })
 
         if not rows:
@@ -137,7 +144,7 @@ class TransferDashboard:
         ).pack(anchor="w")
         ttk.Label(
             outer,
-            text="Automated Excel-to-PDI entry • ITEM NO + EA + XFER QTY",
+            text="Automated Excel-to-PDI entry • ITEM NO + CODE + XFER QTY",
             font=("Segoe UI", 9)
         ).pack(anchor="w", pady=(2, 15))
 
@@ -155,8 +162,8 @@ class TransferDashboard:
         ttk.Label(
             info,
             text=(
-                "A: ITEM NO     |     G: XFER QTY     |     Package code: EA\n"
-                "PDI: Paste Item → TAB ×2 → Paste EA → TAB → Paste Qty → TAB ×3"
+                "A: ITEM NO     |     E: PACKAGE CODE     |     G: XFER QTY\n"
+                "PDI: Paste Item → TAB ×2 → Paste Excel Code → TAB → Paste Qty → TAB ×3"
             ),
             justify="left"
         ).pack(anchor="w")
@@ -227,7 +234,7 @@ class TransferDashboard:
         self.progress["value"] = 0
         self.progress_text.set(f"0 / {len(rows)}")
         self.status.set("Excel loaded successfully.")
-        self.detail.set(f"{len(rows)} item rows ready • Package code EA")
+        self.detail.set(f"{len(rows)} item rows ready • Codes read from Excel column E")
         self.pause_event.clear()
         self.stop_event.clear()
 
@@ -314,7 +321,7 @@ class TransferDashboard:
         self.progress["value"] = percent
         self.progress_text.set(f"{completed} / {total}")
         self.detail.set(
-            f"Excel row {row['excel_row']} • Item {row['item']} • EA • Qty {row['qty']}"
+            f"Excel row {row['excel_row']} • Item {row['item']} • Code {row['code']} • Qty {row['qty']}"
         )
 
     def _run_transfer(self):
@@ -331,14 +338,14 @@ class TransferDashboard:
                 self.ui(self._set_progress, self.current_index, total, row)
 
                 # Exact requested PDI sequence:
-                # ITEM NO -> TAB -> TAB -> EA -> TAB -> XFER QTY -> TAB x3
+                # ITEM NO -> TAB -> TAB -> row's Excel E code -> TAB -> XFER QTY -> TAB x3
                 if not self._paste(row["item"]):
                     break
                 if not self._wait(AFTER_ITEM_DELAY):
                     break
                 if not self._tab() or not self._tab():
                     break
-                if not self._paste(PACKAGE_CODE):
+                if not self._paste(row["code"]):
                     break
                 if not self._tab():
                     break
